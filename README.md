@@ -77,9 +77,9 @@ Saves filtered 2021 QB dropback data to `data/raw/pbp_2021.parquet`.
 ### 3. Download Big Data Bowl 2023 tracking data (Kaggle)
 
 **One-time Kaggle credentials setup:**
-1. Go to kaggle.com → Account → "Create New API Token" → downloads `kaggle.json`
-2. Move it: `mkdir -p ~/.kaggle && mv ~/Downloads/kaggle.json ~/.kaggle/kaggle.json`
-3. Lock permissions: `chmod 600 ~/.kaggle/kaggle.json`
+1. Go to kaggle.com → Account → "Create New Token" → copies a `KGAT_...` token to your clipboard
+2. Save it: `mkdir -p ~/.kaggle && echo "PASTE_YOUR_TOKEN_HERE" > ~/.kaggle/access_token`
+3. Lock permissions: `chmod 600 ~/.kaggle/access_token`
 
 **Download and unzip:**
 ```bash
