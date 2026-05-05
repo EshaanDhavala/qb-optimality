@@ -1,0 +1,17 @@
+# Data — never commit (too large, Kaggle terms prohibit redistribution)
+data/raw/
+data/processed/
+
+# Python
+venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.env
+
+# Outputs — commit when ready to share results
+# outputs/
+
+# OS
+.DS_Store
+Thumbs.db
