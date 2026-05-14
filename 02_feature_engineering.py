@@ -134,8 +134,10 @@ def get_snap_and_release_frames(play_tracking):
     """
     Return (snap_frame_df, release_frame_df) for a single play.
 
-    'pass_released' is an alternate event name used in some BDB tracking
-    files; we fall back to it if 'pass_forward' is absent.
+    Release frame priority:
+      1. pass_forward       (standard pass)
+      2. pass_released      (alternate BDB event name)
+      3. qb_sacked          (sack plays — pocket collapsed before throw)
 
     Returns (None, None) if either frame is missing or snap >= release.
     """
@@ -143,6 +145,8 @@ def get_snap_and_release_frames(play_tracking):
     release_rows = play_tracking[play_tracking["event"] == "pass_forward"]
     if release_rows.empty:
         release_rows = play_tracking[play_tracking["event"] == "pass_released"]
+    if release_rows.empty:
+        release_rows = play_tracking[play_tracking["event"] == "qb_sacked"]
 
     if snap_rows.empty or release_rows.empty:
         return None, None
