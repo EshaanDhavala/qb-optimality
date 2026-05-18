@@ -377,6 +377,13 @@ def main():
     if drop_count > 0:
         print(f"  Warning: {drop_count} plays lost in merge — possible play_id mismatch")
 
+    # ── Derive situation from wp (nflfastR doesn't include this column) ───
+    if "situation" not in merged.columns and "wp" in merged.columns:
+        merged["situation"] = np.where(
+            (merged["wp"] >= 0.4) & (merged["wp"] <= 0.6), "clutch",
+            np.where((merged["wp"] < 0.2) | (merged["wp"] > 0.8), "non_clutch", "neutral")
+        )
+
     # ── Column ordering (matches README spec) ────────────────────────────
     id_cols = ["game_id", "play_id", "passer_player_name", "week", "situation", "epa"]
     spatial_cols = [
