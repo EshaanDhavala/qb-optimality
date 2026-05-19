@@ -3,12 +3,18 @@
 --------------------
 Train an XGBoost regressor to predict EPA per play from spatial pocket features.
 
+Predictions are generated via leave-one-week-out (LOO) cross-validation so that
+every play's predicted_epa comes from a model that never saw that play during
+training. This eliminates data leakage and ensures unbiased optimality scores
+in 04_analysis.py.
+
 Inputs:
     data/processed/features.parquet   (produced by 02_feature_engineering.py)
 
 Outputs:
-    outputs/model.json                          trained XGBoost model
-    outputs/tables/play_predictions.csv         game_id, play_id, epa, predicted_epa
+    outputs/model.json                     final model trained on all data (for archiving)
+    outputs/tables/play_predictions.csv    game_id, play_id, epa, predicted_epa (LOO)
+    outputs/tables/model_summary.json      hyperparameters and per-week RMSE
 
 Pipeline position:
     02_feature_engineering.py  →  [THIS SCRIPT]  →  04_analysis.py
@@ -27,21 +33,33 @@ FEATURES_PATH   = "data/processed/features.parquet"
 MODEL_OUT       = "outputs/model.json"
 PREDICTIONS_OUT = "outputs/tables/play_predictions.csv"
 
-# Columns that are identifiers / targets, not features
+# Columns excluded from model features.
+# Identifiers and the target are obvious. Post-play outcomes must be excluded
+# because they are only known AFTER the play resolves — using them would mean
+# the model predicts EPA from EPA-correlated outcomes, not from the pocket situation.
 NON_FEATURE_COLS = {
-    "game_id",
-    "play_id",
-    "passer_player_name",
-    "situation",
+    # Identifiers
+    "game_id", "play_id", "passer_player_name", "passer_player_id",
+    "posteam", "defteam", "season_type",
+    # Target
     "epa",
-    "week",
+    # Grouping metadata
+    "situation", "week",
+    # Post-play outcomes — known only after the play, must not be features
+    "qb_epa",        # QB-credited EPA — directly correlated with the target
+    "wpa",           # win probability added — computed from the play's outcome
+    "sack",          # whether the QB was sacked
+    "qb_scramble",   # whether the QB scrambled
+    "interception",  # whether the pass was intercepted
+    "complete_pass", # whether the pass was completed
+    "air_yards",     # yards the ball travelled in the air — measured post-throw
+    "cpoe",          # completion % over expected — outcome metric
 }
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def load_and_validate(path: str) -> pd.DataFrame:
-    """Load the feature parquet and do basic sanity checks."""
     if not os.path.exists(path):
         raise FileNotFoundError(
             f"Features file not found at '{path}'. "
@@ -54,37 +72,18 @@ def load_and_validate(path: str) -> pd.DataFrame:
     if missing_required:
         raise ValueError(f"Missing required columns: {missing_required}")
 
-    # Drop rows with any null feature values
     feature_cols = [c for c in df.columns if c not in NON_FEATURE_COLS]
     before = len(df)
-    df = df.dropna(subset=feature_cols + ["epa"])
+    df = df.dropna(subset=["epa"])
     dropped = before - len(df)
     if dropped:
-        print(f"  Dropped {dropped:,} rows with null feature/epa values ({dropped/before:.1%})")
+        print(f"  Dropped {dropped:,} rows with null EPA ({dropped/before:.1%})")
 
     return df
 
 
-def split_by_week(df: pd.DataFrame):
-    """
-    Train  : weeks 1–6
-    Val    : week 7
-    Test   : week 8
-    """
-    train = df[df["week"] <= 6].copy()
-    val   = df[df["week"] == 7].copy()
-    test  = df[df["week"] == 8].copy()
-    print(f"\nSplit summary:")
-    print(f"  Train (weeks 1–6) : {len(train):,} plays")
-    print(f"  Val   (week 7)    : {len(val):,} plays")
-    print(f"  Test  (week 8)    : {len(test):,} plays")
-    return train, val, test
-
-
 def get_feature_cols(df: pd.DataFrame) -> list[str]:
-    """Return sorted list of feature columns (everything that isn't metadata/target)."""
-    cols = [c for c in df.columns if c not in NON_FEATURE_COLS]
-    return cols
+    return [c for c in df.columns if c not in NON_FEATURE_COLS]
 
 
 def rmse(y_true, y_pred) -> float:
@@ -100,10 +99,8 @@ def tune_hyperparameters(
     y_val: pd.Series,
 ) -> dict:
     """
-    Grid search over a small but meaningful hyperparameter space.
-    Uses validation RMSE as the selection criterion.
-
-    Returns the best hyperparameter dict.
+    Grid search over hyperparameter space using weeks 1-6 (train) and week 7 (val).
+    Returns the best parameter dict by validation RMSE.
     """
     param_grid = {
         "n_estimators" : [200, 400, 600],
@@ -114,15 +111,13 @@ def tune_hyperparameters(
 
     keys   = list(param_grid.keys())
     values = list(param_grid.values())
-
-    best_rmse   = float("inf")
-    best_params = {}
-    results     = []
-
-    total = 1
+    total  = 1
     for v in values:
         total *= len(v)
     print(f"\nTuning over {total} hyperparameter combinations…")
+
+    best_rmse   = float("inf")
+    best_params = {}
 
     for combo in product(*values):
         params = dict(zip(keys, combo))
@@ -133,13 +128,8 @@ def tune_hyperparameters(
             n_jobs       = -1,
             verbosity    = 0,
         )
-        model.fit(
-            X_train, y_train,
-            eval_set              = [(X_val, y_val)],
-            verbose               = False,
-        )
+        model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
         val_rmse = rmse(y_val, model.predict(X_val))
-        results.append({**params, "val_rmse": val_rmse})
 
         if val_rmse < best_rmse:
             best_rmse   = val_rmse
@@ -151,29 +141,51 @@ def tune_hyperparameters(
     return best_params
 
 
-# ── Training ───────────────────────────────────────────────────────────────────
+# ── Leave-One-Week-Out Predictions ─────────────────────────────────────────────
 
-def train_final_model(
-    X_train: pd.DataFrame,
-    y_train: pd.Series,
-    X_val: pd.DataFrame,
-    y_val: pd.Series,
+def generate_oof_predictions(
+    df: pd.DataFrame,
+    feature_cols: list[str],
     best_params: dict,
-) -> xgb.XGBRegressor:
-    """Retrain on train+val combined with the best hyperparameters."""
-    X_combined = pd.concat([X_train, X_val])
-    y_combined = pd.concat([y_train, y_val])
+) -> pd.DataFrame:
+    """
+    For each week w, train on all other weeks and predict week w.
+    Every play's predicted_epa is produced by a model that never saw it —
+    no data leakage into the optimality scores used by 04_analysis.py.
 
-    model = xgb.XGBRegressor(
-        **best_params,
-        objective    = "reg:squarederror",
-        random_state = 42,
-        n_jobs       = -1,
-        verbosity    = 0,
-    )
-    model.fit(X_combined, y_combined)
-    return model
+    XGBoost handles NaN feature values natively (learns optimal split direction
+    for missing values), so plays with partial features (e.g. screen passes with
+    no pocket area) are still scored rather than dropped.
+    """
+    weeks  = sorted(df["week"].unique())
+    chunks = []
 
+    print(f"\nLeave-one-week-out predictions ({len(weeks)} folds):")
+    for held_week in weeks:
+        train_df = df[df["week"] != held_week]
+        held_df  = df[df["week"] == held_week]
+
+        model = xgb.XGBRegressor(
+            **best_params,
+            objective    = "reg:squarederror",
+            random_state = 42,
+            n_jobs       = -1,
+            verbosity    = 0,
+        )
+        model.fit(train_df[feature_cols], train_df["epa"])
+        preds = model.predict(held_df[feature_cols])
+
+        chunk = held_df[["game_id", "play_id", "epa", "week"]].copy()
+        chunk["predicted_epa"] = preds
+        chunks.append(chunk)
+
+        week_rmse = rmse(held_df["epa"], preds)
+        print(f"  Week {held_week}  RMSE = {week_rmse:.4f}  ({len(held_df):,} plays)")
+
+    return pd.concat(chunks, ignore_index=True)
+
+
+# ── Reporting ──────────────────────────────────────────────────────────────────
 
 def print_feature_importances(model: xgb.XGBRegressor, feature_cols: list[str]):
     importances = pd.Series(
@@ -191,68 +203,77 @@ def print_feature_importances(model: xgb.XGBRegressor, feature_cols: list[str]):
 def main():
     os.makedirs("outputs/tables", exist_ok=True)
 
-    # 1. Load data
+    # 1. Load data — XGBoost handles NaN features natively, so we only drop
+    #    rows with missing EPA (the target); partial-feature plays are kept.
     df = load_and_validate(FEATURES_PATH)
-
-    # 2. Split
-    train, val, test = split_by_week(df)
-    feature_cols     = get_feature_cols(df)
+    feature_cols = get_feature_cols(df)
     print(f"\nFeature columns ({len(feature_cols)}):\n  {feature_cols}")
 
-    X_train, y_train = train[feature_cols], train["epa"]
-    X_val,   y_val   = val[feature_cols],   val["epa"]
-    X_test,  y_test  = test[feature_cols],  test["epa"]
+    # 2. Tune hyperparameters using weeks 1-6 (train) and week 7 (val)
+    train = df[df["week"] <= 6]
+    val   = df[df["week"] == 7]
+    test  = df[df["week"] == 8]
+    print(f"\nHyperparameter tuning split:")
+    print(f"  Train (weeks 1–6) : {len(train):,} plays")
+    print(f"  Val   (week 7)    : {len(val):,} plays")
+    print(f"  Test  (week 8)    : {len(test):,} plays")
 
-    # 3. Tune hyperparameters on validation set
-    best_params = tune_hyperparameters(X_train, y_train, X_val, y_val)
+    best_params = tune_hyperparameters(
+        train[feature_cols], train["epa"],
+        val[feature_cols],   val["epa"],
+    )
 
-    # 4. Retrain on train + val combined
-    print("\nRetraining on train + val with best hyperparameters…")
-    final_model = train_final_model(X_train, y_train, X_val, y_val, best_params)
+    # 3. Generate LOO predictions — every play predicted by a model that
+    #    never saw it, eliminating data leakage into optimality scores
+    oof_df = generate_oof_predictions(df, feature_cols, best_params)
 
-    # 5. Evaluate on held-out test set
-    test_preds = final_model.predict(X_test)
-    test_rmse  = rmse(y_test, test_preds)
-    val_preds  = final_model.predict(X_val)
-    val_rmse   = rmse(y_val, val_preds)
+    # 4. Report metrics
+    week8_oof    = oof_df[oof_df["week"] == 8]
+    test_rmse    = rmse(week8_oof["epa"], week8_oof["predicted_epa"])
+    overall_rmse = rmse(oof_df["epa"], oof_df["predicted_epa"])
 
     print(f"\n{'='*45}")
-    print(f"  Val  RMSE : {val_rmse:.4f}")
-    print(f"  Test RMSE : {test_rmse:.4f}")
+    print(f"  Test RMSE (week 8 LOO)  : {test_rmse:.4f}")
+    print(f"  Overall RMSE (all LOO)  : {overall_rmse:.4f}")
     print(f"{'='*45}")
 
-    # 6. Feature importances
+    # 5. Train a final model on ALL data for feature importances + archiving.
+    #    This model is NOT used for predictions — LOO predictions are used instead.
+    print("\nTraining final model on all data (for feature importances)…")
+    final_model = xgb.XGBRegressor(
+        **best_params,
+        objective    = "reg:squarederror",
+        random_state = 42,
+        n_jobs       = -1,
+        verbosity    = 0,
+    )
+    final_model.fit(df[feature_cols], df["epa"])
     print_feature_importances(final_model, feature_cols)
-
-    # 7. Save model
     final_model.save_model(MODEL_OUT)
     print(f"\nModel saved → {MODEL_OUT}")
 
-    # 8. Generate predictions for ALL plays (needed by 04_analysis.py)
-    all_preds = final_model.predict(df[feature_cols])
-    predictions_df = pd.DataFrame({
-        "game_id"       : df["game_id"].values,
-        "play_id"       : df["play_id"].values,
-        "epa"           : df["epa"].values,
-        "predicted_epa" : all_preds,
-    })
-    predictions_df.to_csv(PREDICTIONS_OUT, index=False)
-    print(f"Predictions saved → {PREDICTIONS_OUT}  ({len(predictions_df):,} rows)")
+    # 6. Save LOO predictions (used by 04_analysis.py)
+    oof_out = oof_df[["game_id", "play_id", "epa", "predicted_epa"]]
+    oof_out.to_csv(PREDICTIONS_OUT, index=False)
+    print(f"LOO predictions saved → {PREDICTIONS_OUT}  ({len(oof_out):,} rows)")
 
-    # 9. Summary report
+    # 7. Summary report with per-week RMSE breakdown
+    per_week_rmse = {
+        f"week_{int(w)}": round(rmse(g["epa"], g["predicted_epa"]), 4)
+        for w, g in oof_df.groupby("week")
+    }
     summary = {
         "best_hyperparameters": best_params,
-        "val_rmse" : round(val_rmse,  4),
-        "test_rmse": round(test_rmse, 4),
-        "n_train"  : len(train),
-        "n_val"    : len(val),
-        "n_test"   : len(test),
-        "features" : feature_cols,
+        "test_rmse_loo"       : round(test_rmse, 4),
+        "overall_rmse_loo"    : round(overall_rmse, 4),
+        "per_week_rmse_loo"   : per_week_rmse,
+        "n_total_plays"       : len(df),
+        "features"            : feature_cols,
     }
     summary_path = "outputs/tables/model_summary.json"
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
-    print(f"Summary saved  → {summary_path}")
+    print(f"Summary saved → {summary_path}")
 
 
 if __name__ == "__main__":

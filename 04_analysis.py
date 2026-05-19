@@ -3,9 +3,13 @@
 --------------
 Compute per-play Optimality Scores and per-QB Clutch Optimality Ratings.
 
-Optimality Score    = epa - predicted_epa            (per play)
-Clutch Rating       = mean(optimality | clutch)
-                    − mean(optimality | non_clutch)  (per QB)
+Optimality Score    = epa - predicted_epa                    (per play)
+Clutch Rating       = mean(optimality | clutch plays)
+                    − mean(optimality | all plays for that QB)
+
+The baseline is the QB's OWN overall mean optimality, not the league average.
+This measures: "Does QB X perform above their own typical level in clutch
+situations?" rather than "Does QB X outperform blowout-game QB X?"
 
 Inputs:
     outputs/tables/play_predictions.csv   (produced by 03_model_training.py)
@@ -27,8 +31,8 @@ PBP_PATH         = "data/raw/pbp_2021.parquet"
 OUTPUT_PATH      = "outputs/tables/qb_clutch_ratings.csv"
 
 # ── Thresholds ─────────────────────────────────────────────────────────────────
-MIN_CLUTCH_PLAYS     = 50
-MIN_NON_CLUTCH_PLAYS = 50
+MIN_CLUTCH_PLAYS = 50
+MIN_TOTAL_PLAYS  = 100
 
 
 # ── Loaders ────────────────────────────────────────────────────────────────────
@@ -82,55 +86,51 @@ def compute_optimality(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def aggregate_by_qb_situation(df: pd.DataFrame) -> pd.DataFrame:
+def aggregate_by_qb(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Restrict to clutch / non_clutch rows, then return one row per
-    (QB, situation) with mean optimality and play count.
+    For each QB compute:
+      - overall_optimality : mean optimality across ALL their plays
+      - clutch_optimality  : mean optimality in clutch plays only
+      - play counts for both
     """
-    df = df[df["situation"].isin(["clutch", "non_clutch"])]
-    grouped = (
-        df.groupby(["passer_player_name", "situation"])
-          .agg(mean_optimality=("optimality_score", "mean"),
-               n_plays        =("optimality_score", "size"))
+    overall = (
+        df.groupby("passer_player_name")
+          .agg(overall_optimality=("optimality_score", "mean"),
+               n_total_plays     =("optimality_score", "size"))
           .reset_index()
     )
-    return grouped
+    clutch = (
+        df[df["situation"] == "clutch"]
+          .groupby("passer_player_name")
+          .agg(clutch_optimality=("optimality_score", "mean"),
+               n_clutch_plays   =("optimality_score", "size"))
+          .reset_index()
+    )
+    return overall.merge(clutch, on="passer_player_name", how="inner")
 
 
 def compute_clutch_rating(grouped: pd.DataFrame) -> pd.DataFrame:
     """
-    Pivot (QB, situation) → one row per QB with both situations side-by-side,
-    apply the 50/50 minimum-sample filter, and compute clutch_rating.
+    Apply minimum-sample filters and compute clutch_rating.
+
+    clutch_rating = clutch_optimality − overall_optimality
+    Positive = QB performs above their own average in clutch situations.
     """
-    means = grouped.pivot(
-        index="passer_player_name", columns="situation", values="mean_optimality"
-    )
-    counts = grouped.pivot(
-        index="passer_player_name", columns="situation", values="n_plays"
-    ).fillna(0).astype(int)
-
-    out = pd.DataFrame({
-        "clutch_optimality"     : means.get("clutch"),
-        "non_clutch_optimality" : means.get("non_clutch"),
-        "n_clutch_plays"        : counts.get("clutch", 0),
-        "n_non_clutch_plays"    : counts.get("non_clutch", 0),
-    }).reset_index()
-
-    before = len(out)
-    out = out[
-        (out["n_clutch_plays"]     >= MIN_CLUTCH_PLAYS) &
-        (out["n_non_clutch_plays"] >= MIN_NON_CLUTCH_PLAYS)
+    before = len(grouped)
+    out = grouped[
+        (grouped["n_clutch_plays"] >= MIN_CLUTCH_PLAYS) &
+        (grouped["n_total_plays"]  >= MIN_TOTAL_PLAYS)
     ].copy()
     print(f"  QBs before threshold: {before}")
     print(f"  QBs after  threshold (≥{MIN_CLUTCH_PLAYS} clutch, "
-          f"≥{MIN_NON_CLUTCH_PLAYS} non-clutch): {len(out)}")
+          f"≥{MIN_TOTAL_PLAYS} total): {len(out)}")
 
-    out["clutch_rating"] = out["clutch_optimality"] - out["non_clutch_optimality"]
+    out["clutch_rating"] = out["clutch_optimality"] - out["overall_optimality"]
     out = out[[
         "passer_player_name",
-        "clutch_optimality", "non_clutch_optimality",
+        "clutch_optimality", "overall_optimality",
         "clutch_rating",
-        "n_clutch_plays", "n_non_clutch_plays",
+        "n_clutch_plays", "n_total_plays",
     ]]
     return out.sort_values("clutch_rating", ascending=False).reset_index(drop=True)
 
@@ -158,7 +158,7 @@ def main():
 
     merged   = merge_context(preds, pbp)
     scored   = compute_optimality(merged)
-    grouped  = aggregate_by_qb_situation(scored)
+    grouped  = aggregate_by_qb(scored)
     ratings  = compute_clutch_rating(grouped)
 
     ratings.to_csv(OUTPUT_PATH, index=False)

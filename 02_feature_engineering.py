@@ -22,7 +22,6 @@ Usage:
     python 02_feature_engineering.py
 """
 
-import os
 import sys
 import numpy as np
 import pandas as pd
@@ -165,7 +164,8 @@ def get_snap_and_release_frames(play_tracking):
 # ── Per-play feature extraction ────────────────────────────────────────────
 
 _QB_DEFAULTS      = {"qb_displacement": np.nan, "qb_speed_at_release": np.nan,
-                     "qb_orientation_at_release": np.nan, "time_to_throw": np.nan}
+                     "qb_orientation_sin": np.nan, "qb_orientation_cos": np.nan,
+                     "time_to_throw": np.nan}
 _RUSHER_DEFAULTS  = {"nearest_rusher_dist": np.nan, "rusher_1_approach_speed": np.nan,
                      "rusher_2_approach_speed": np.nan, "rushers_within_3yds": np.nan}
 _POCKET_DEFAULTS  = {"pocket_area_at_release": np.nan, "pocket_collapse_rate": np.nan}
@@ -193,7 +193,7 @@ def process_play(play_tracking, qb_nfl_id, pff_play_df, players_df):
         feats.update(_RUSHER_DEFAULTS)
 
     try:
-        feats.update(get_pocket_features(snap_frame, release_frame, players_df))
+        feats.update(get_pocket_features(snap_frame, release_frame, players_df, pff_play_df))
     except Exception:
         feats.update(_POCKET_DEFAULTS)
 
@@ -378,16 +378,36 @@ def main():
         print(f"  Warning: {drop_count} plays lost in merge — possible play_id mismatch")
 
     # ── Derive situation from wp (nflfastR doesn't include this column) ───
+    # Mirrors the logic in 00_download_pbp.py. Non-clutch is set first so
+    # clutch can overwrite it for genuinely critical low-WP plays.
     if "situation" not in merged.columns and "wp" in merged.columns:
-        merged["situation"] = np.where(
-            (merged["wp"] >= 0.4) & (merged["wp"] <= 0.6), "clutch",
-            np.where((merged["wp"] < 0.2) | (merged["wp"] > 0.8), "non_clutch", "neutral")
+        has_qtr   = "qtr" in merged.columns
+        has_down  = "down" in merged.columns
+        has_sdiff = "score_differential" in merged.columns
+        has_gsecs = "game_seconds_remaining" in merged.columns
+
+        merged["situation"] = "neutral"
+        merged.loc[
+            (merged["wp"] < 0.2) | (merged["wp"] > 0.8), "situation"
+        ] = "non_clutch"
+
+        late = merged["qtr"] >= 4 if has_qtr else pd.Series(True, index=merged.index)
+        cond1 = (merged["wp"] >= 0.4) & (merged["wp"] <= 0.6) & late
+        cond2 = (
+            late & (merged["down"] == 4) & (merged["score_differential"].abs() <= 8)
+            if (has_qtr and has_down and has_sdiff) else pd.Series(False, index=merged.index)
         )
+        cond3 = (
+            late & (merged["game_seconds_remaining"] <= 120) &
+            (merged["score_differential"] >= -8) & (merged["score_differential"] < 0)
+            if (has_qtr and has_gsecs and has_sdiff) else pd.Series(False, index=merged.index)
+        )
+        merged.loc[cond1 | cond2 | cond3, "situation"] = "clutch"
 
     # ── Column ordering (matches README spec) ────────────────────────────
     id_cols = ["game_id", "play_id", "passer_player_name", "week", "situation", "epa"]
     spatial_cols = [
-        "qb_displacement", "qb_speed_at_release", "qb_orientation_at_release", "time_to_throw",
+        "qb_displacement", "qb_speed_at_release", "qb_orientation_sin", "qb_orientation_cos", "time_to_throw",
         "nearest_rusher_dist", "rusher_1_approach_speed", "rusher_2_approach_speed", "rushers_within_3yds",
         "pocket_area_at_release", "pocket_collapse_rate",
     ]

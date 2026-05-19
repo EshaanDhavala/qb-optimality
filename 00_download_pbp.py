@@ -95,15 +95,32 @@ pbp_drops = pbp_slim[
 print(f"  After dropback filter: {len(pbp_drops):,} plays")
 
 # ── Add clutch flag ────────────────────────────────────────────────────────
+# Clutch captures three late-game high-pressure scenarios (applied last so
+# they overwrite non_clutch when WP is low but the play is genuinely critical):
+#   1. Close game (WP 40–60%) in Q4/OT
+#   2. 4th down within one score (|score_diff| ≤ 8) in Q4/OT — must-convert plays
+#   3. 2-minute drill: trailing by ≤8 with ≤120 seconds left in Q4/OT
+# Non-clutch (blowouts) is set first so clutch can overwrite it where needed.
 pbp_drops["situation"] = "neutral"
-pbp_drops.loc[
-    (pbp_drops["wp"] >= 0.40) & (pbp_drops["wp"] <= 0.60),
-    "situation"
-] = "clutch"
+
 pbp_drops.loc[
     (pbp_drops["wp"] < 0.20) | (pbp_drops["wp"] > 0.80),
     "situation"
 ] = "non_clutch"
+
+clutch_mask = (
+    # 1. Classic close game, late quarter
+    ((pbp_drops["wp"] >= 0.40) & (pbp_drops["wp"] <= 0.60) & (pbp_drops["qtr"] >= 4))
+    |
+    # 2. Must-convert: 4th down within one score in Q4/OT
+    ((pbp_drops["qtr"] >= 4) & (pbp_drops["down"] == 4) &
+     (pbp_drops["score_differential"].abs() <= 8))
+    |
+    # 3. 2-minute drill: trailing by one score or less with ≤2 minutes left
+    ((pbp_drops["qtr"] >= 4) & (pbp_drops["game_seconds_remaining"] <= 120) &
+     (pbp_drops["score_differential"] >= -8) & (pbp_drops["score_differential"] < 0))
+)
+pbp_drops.loc[clutch_mask, "situation"] = "clutch"
 
 counts = pbp_drops["situation"].value_counts()
 print(f"\n  Clutch plays:     {counts.get('clutch', 0):,}")

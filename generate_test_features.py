@@ -47,8 +47,10 @@ def main():
     # qb_speed_at_release: 0-8 mph range, most around 1-3
     qb_speed_at_release = rng.gamma(shape=1.8, scale=1.0, size=n).clip(0, 9)
 
-    # qb_orientation_at_release: degrees 0-360
-    qb_orientation_at_release = rng.uniform(0, 360, size=n)
+    # qb_orientation: encode as sin/cos to handle circular nature (0° ≈ 360°)
+    qb_orientation_raw = rng.uniform(0, 2 * np.pi, size=n)
+    qb_orientation_sin = np.sin(qb_orientation_raw)
+    qb_orientation_cos = np.cos(qb_orientation_raw)
 
     # time_to_throw: typically 2.0-4.0 seconds, avg ~2.7
     time_to_throw = rng.normal(loc=2.7, scale=0.6, size=n).clip(1.0, 6.0)
@@ -71,8 +73,8 @@ def main():
     # pocket_area_at_release: convex hull area of OL, typically 15-40 sq yards
     pocket_area_at_release = rng.normal(loc=25, scale=7, size=n).clip(5, 55)
 
-    # pocket_collapse_rate: change in area per second, negative = collapsing
-    pocket_collapse_rate = rng.normal(loc=-3.0, scale=4.0, size=n).clip(-20, 10)
+    # pocket_collapse_rate: positive = pocket shrinking, negative = expanding
+    pocket_collapse_rate = rng.normal(loc=3.0, scale=4.0, size=n).clip(-10, 20)
 
     # ── Correlate features with EPA slightly (model needs signal to learn) ─
     # Better pocket + more time = higher EPA tendency
@@ -99,7 +101,8 @@ def main():
         # QB spatial features
         "qb_displacement"           : qb_displacement,
         "qb_speed_at_release"       : qb_speed_at_release,
-        "qb_orientation_at_release" : qb_orientation_at_release,
+        "qb_orientation_sin"        : qb_orientation_sin,
+        "qb_orientation_cos"        : qb_orientation_cos,
         "time_to_throw"             : time_to_throw,
 
         # Rusher features
@@ -123,7 +126,7 @@ def main():
 
     # ── Introduce ~5% nulls in spatial features (realistic for edge cases) ─
     spatial_cols = [
-        "qb_displacement", "qb_speed_at_release", "qb_orientation_at_release",
+        "qb_displacement", "qb_speed_at_release", "qb_orientation_sin", "qb_orientation_cos",
         "time_to_throw", "nearest_rusher_dist", "rusher_1_approach_speed",
         "pocket_area_at_release", "pocket_collapse_rate"
     ]
