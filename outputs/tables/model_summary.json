@@ -1,0 +1,42 @@
+{
+  "best_hyperparameters": {
+    "n_estimators": 200,
+    "max_depth": 3,
+    "learning_rate": 0.05,
+    "subsample": 1.0
+  },
+  "test_rmse_loo": 1.5922,
+  "overall_rmse_loo": 1.5715,
+  "per_week_rmse_loo": {
+    "week_1": 1.5267,
+    "week_2": 1.6992,
+    "week_3": 1.5094,
+    "week_4": 1.4972,
+    "week_5": 1.6382,
+    "week_6": 1.5473,
+    "week_7": 1.5565,
+    "week_8": 1.5922
+  },
+  "n_total_plays": 7088,
+  "features": [
+    "qb_displacement",
+    "qb_speed_at_release",
+    "qb_orientation_sin",
+    "qb_orientation_cos",
+    "time_to_throw",
+    "nearest_rusher_dist",
+    "rusher_1_approach_speed",
+    "rusher_2_approach_speed",
+    "rushers_within_3yds",
+    "pocket_area_at_release",
+    "pocket_collapse_rate",
+    "down",
+    "ydstogo",
+    "yardline_100",
+    "score_differential",
+    "half_seconds_remaining",
+    "game_seconds_remaining",
+    "qtr",
+    "wp"
+  ]
+}
