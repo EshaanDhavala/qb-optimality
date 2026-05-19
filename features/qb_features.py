@@ -44,6 +44,6 @@ def get_qb_features(snap_frame, release_frame, qb_nfl_id):
     if release_frame_id > snap_frame_id:
         raw_time = float((release_frame_id - snap_frame_id) / 10)
         # Clip to 10s max — values above this indicate corrupted frame IDs
-        features["time_to_throw"] = min(raw_time, 10.0)
+        features["time_to_throw"] = float(np.minimum(raw_time, 10.0))
 
     return features

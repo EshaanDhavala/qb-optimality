@@ -10,7 +10,6 @@ Args:
     snap_frame    : pd.DataFrame — all tracking rows at the ball_snap frame for
                     this play (columns: nflId, x, y, s, a, o, dir, frameId, event, ...)
     release_frame : pd.DataFrame — all tracking rows at the pass_forward frame
-    players_df    : pd.DataFrame — full players.csv table (nflId, displayName, position, ...)
 
 Returns dict with exactly these keys (float, NaN if uncomputable):
     pocket_area_at_release — convex hull area (sq yards) of blocker positions at release frame
@@ -38,7 +37,7 @@ def _get_pff_df() -> pd.DataFrame:
     return _PFF_DF_CACHE
 
 
-def get_pocket_features(snap_frame, release_frame, players_df, pff_play_df=None):
+def get_pocket_features(snap_frame, release_frame, pff_play_df=None):
     """
     pff_play_df: pre-filtered PFF rows for this play (gameId+playId already filtered).
                  Pass this from 02_feature_engineering.py to avoid reloading the full
@@ -54,11 +53,10 @@ def get_pocket_features(snap_frame, release_frame, players_df, pff_play_df=None)
         play_pff = pff_play_df
     # "Pass" is the QB/passer role — including it would add the QB himself to the
     # pocket hull and inflate the area. Only "Pass Block" tags OL and blocking TEs.
-    blocker_ids = play_pff[play_pff["pff_role"] == "Pass Block"]["nflId"].tolist()
+    blocker_ids = set(play_pff[play_pff["pff_role"] == "Pass Block"]["nflId"].tolist())
 
-    blockers = players_df[players_df["nflId"].isin(blocker_ids)]
-    filtered_snaps    = snap_frame.merge(blockers[["nflId"]], on="nflId", how="inner")
-    filtered_releases = release_frame.merge(blockers[["nflId"]], on="nflId", how="inner")
+    filtered_snaps    = snap_frame[snap_frame["nflId"].isin(blocker_ids)]
+    filtered_releases = release_frame[release_frame["nflId"].isin(blocker_ids)]
 
     def convex_hull_area(df):
         coords = df[["x", "y"]].values
@@ -89,8 +87,7 @@ def get_pocket_features(snap_frame, release_frame, players_df, pff_play_df=None)
 
 
 if __name__ == "__main__":
-    players_df = pd.read_csv("data/raw/big_data_bowl_2023/players.csv")
-    tracking1  = pd.read_csv("data/raw/big_data_bowl_2023/tracking_week_1.csv")
+    tracking1 = pd.read_csv("data/raw/big_data_bowl_2023/tracking_week_1.csv")
 
     snaps    = tracking1[tracking1["event"] == "ball_snap"]
     releases = tracking1[tracking1["event"] == "pass_forward"]
@@ -107,5 +104,5 @@ if __name__ == "__main__":
         for i, (game_id, play_id) in enumerate(common_plays[:10]):
             snap_f    = tracking1[(tracking1["gameId"] == game_id) & (tracking1["playId"] == play_id) & (tracking1["event"] == "ball_snap")]
             release_f = tracking1[(tracking1["gameId"] == game_id) & (tracking1["playId"] == play_id) & (tracking1["event"] == "pass_forward")]
-            result = get_pocket_features(snap_f, release_f, players_df)
+            result = get_pocket_features(snap_f, release_f)
             print(f"Play #{i+1} | Game: {game_id} | Play: {play_id} | {result}")

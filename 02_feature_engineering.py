@@ -171,7 +171,7 @@ _RUSHER_DEFAULTS  = {"nearest_rusher_dist": np.nan, "rusher_1_approach_speed": n
 _POCKET_DEFAULTS  = {"pocket_area_at_release": np.nan, "pocket_collapse_rate": np.nan}
 
 
-def process_play(play_tracking, qb_nfl_id, pff_play_df, players_df):
+def process_play(play_tracking, qb_nfl_id, pff_play_df):
     """
     Extract all spatial features for one play.
     Returns a feature dict, or None if snap/release frames are missing.
@@ -193,7 +193,7 @@ def process_play(play_tracking, qb_nfl_id, pff_play_df, players_df):
         feats.update(_RUSHER_DEFAULTS)
 
     try:
-        feats.update(get_pocket_features(snap_frame, release_frame, players_df, pff_play_df))
+        feats.update(get_pocket_features(snap_frame, release_frame, pff_play_df))
     except Exception:
         feats.update(_POCKET_DEFAULTS)
 
@@ -247,7 +247,7 @@ def process_week(week_num, tracking_df, plays_df, pff_df, players_df, game_id_ma
             skipped += 1
             continue
 
-        feats = process_play(play_tracking, qb_nfl_id, pff_play_df, players_df)
+        feats = process_play(play_tracking, qb_nfl_id, pff_play_df)
         if feats is None:
             skipped += 1
             continue
