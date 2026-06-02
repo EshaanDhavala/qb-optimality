@@ -31,8 +31,8 @@ PBP_PATH         = "data/raw/pbp_2021.parquet"
 OUTPUT_PATH      = "outputs/tables/qb_clutch_ratings.csv"
 
 # ── Thresholds ─────────────────────────────────────────────────────────────────
-MIN_CLUTCH_PLAYS = 50
-MIN_TOTAL_PLAYS  = 100
+MIN_CLUTCH_PLAYS = 10
+MIN_TOTAL_PLAYS  = 50
 
 
 # ── Loaders ────────────────────────────────────────────────────────────────────
