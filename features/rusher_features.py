@@ -1,9 +1,9 @@
 """
 features/rusher_features.py
 ---------------------------
-STUB — Gonzalo replaces this with the real implementation.
+Pass rusher spatial features for one play.
 
-Interface contract (do not change the signature or return keys):
+Interface contract:
     get_rusher_features(release_frame, qb_nfl_id, pff_play_df) -> dict
 
 Args:
@@ -19,7 +19,7 @@ Returns dict with exactly these keys:
     rusher_2_approach_speed — float, speed (yards/s) of the 2nd nearest rusher (NaN if < 2)
     rushers_within_3yds     — int (or float), count of rushers within 3.0 yards of QB
 
-Edge cases to handle:
+Edge cases:
     - No players tagged pff_role == "Pass Rush"  →  all NaN (rushers_within_3yds = NaN)
     - Fewer than 2 rushers                       →  rusher_2_approach_speed = NaN
     - Rusher nflId not found in release_frame     →  skip that rusher
@@ -29,10 +29,39 @@ import numpy as np
 
 
 def get_rusher_features(release_frame, qb_nfl_id, pff_play_df):
-    # TODO (Gonzalo): replace stub body with real implementation
-    return {
+    nan_result = {
         "nearest_rusher_dist":      np.nan,
         "rusher_1_approach_speed":  np.nan,
         "rusher_2_approach_speed":  np.nan,
         "rushers_within_3yds":      np.nan,
+    }
+
+    qb_row = release_frame[release_frame["nflId"] == qb_nfl_id]
+    if qb_row.empty:
+        return nan_result
+    qb_x = qb_row.iloc[0]["x"]
+    qb_y = qb_row.iloc[0]["y"]
+
+    rusher_ids = set(pff_play_df[pff_play_df["pff_role"] == "Pass Rush"]["nflId"].tolist())
+    if not rusher_ids:
+        return nan_result
+
+    rushers = release_frame[release_frame["nflId"].isin(rusher_ids)].copy()
+    if rushers.empty:
+        return nan_result
+
+    rushers["dist"] = np.sqrt((rushers["x"] - qb_x) ** 2 + (rushers["y"] - qb_y) ** 2)
+    rushers = rushers.sort_values("dist").reset_index(drop=True)
+
+    nearest          = rushers.iloc[0]
+    nearest_dist     = float(nearest["dist"])
+    rusher_1_speed   = float(nearest["s"])
+    rusher_2_speed   = float(rushers.iloc[1]["s"]) if len(rushers) >= 2 else np.nan
+    within_3         = int((rushers["dist"] <= 3.0).sum())
+
+    return {
+        "nearest_rusher_dist":      round(nearest_dist,   2),
+        "rusher_1_approach_speed":  round(rusher_1_speed, 2),
+        "rusher_2_approach_speed":  np.nan if np.isnan(rusher_2_speed) else round(rusher_2_speed, 2),
+        "rushers_within_3yds":      within_3,
     }

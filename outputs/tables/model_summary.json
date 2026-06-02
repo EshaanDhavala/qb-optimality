@@ -5,17 +5,17 @@
     "learning_rate": 0.05,
     "subsample": 1.0
   },
-  "test_rmse_loo": 1.5925,
-  "overall_rmse_loo": 1.5879,
+  "test_rmse_loo": 1.596,
+  "overall_rmse_loo": 1.5731,
   "per_week_rmse_loo": {
-    "week_1": 1.5299,
-    "week_2": 1.7156,
-    "week_3": 1.5338,
-    "week_4": 1.5281,
-    "week_5": 1.6467,
-    "week_6": 1.5706,
-    "week_7": 1.5841,
-    "week_8": 1.5925
+    "week_1": 1.5295,
+    "week_2": 1.6979,
+    "week_3": 1.5118,
+    "week_4": 1.5009,
+    "week_5": 1.6415,
+    "week_6": 1.5466,
+    "week_7": 1.5544,
+    "week_8": 1.596
   },
   "n_total_plays": 7088,
   "features": [
